@@ -45,8 +45,7 @@ To solve these challenges, I built an AWS Step Functions state machine along wit
 
 I built the AWS Step Functions state machine and core processing Lambdas, orchestrating data movement across S3, OpenAI, DuckDB, and platform APIs.
 
-<img width="598" height="702" alt="fractionstepfunctions_graph" src="https://github.com/user-attachments/assets/83966f11-51ac-4ba4-8b8c-e40bea1e19a6" />
-
+<img width="1606" height="719" alt="fractionstepfunctions_graph" src="https://github.com/user-attachments/assets/245cd97c-7ca4-4fa6-b266-d1a063c00801" />
 
 
 ### Data Processing Steps
