@@ -16,7 +16,7 @@ At EMI, we automate field service ticket and invoice submissions for oil and gas
 
 Aimsio exports data into three distinct JSON payload formats depending on whether field staff save a transaction as a ticket, an invoice, or a blanket invoice. Upstream users select the ticket or invoice format based on whether the downstream buyer expects an OpenTicket or OpenInvoice submission. About 99% of the data required is provided and can be directly processed in the structured JSON. However, several pieces of information required by downstream platforms are omitted from the JSON and are only available in the attached PDF documents.
 
-To prepare each submission, the pipeline performs four processing steps:
+To prepare each submission, the pipeline should perform four processing steps:
 
 * **Determine the supplier department:** The JSON export does not include the supplier department. Instead, the selected department is indicated by the logo shown in the PDF header, so the pipeline identifies the logo to determine which supplier department to submit as.
   
@@ -26,6 +26,33 @@ To prepare each submission, the pipeline performs four processing steps:
 
 * **Validate AFE and accounting codes:** Before submitting to OpenInvoice, the pipeline validates AFE (Authorization for Expenditure) through the platform API to reduce submission failures caused by invalid or mistyped values.
 
+---
+
+## Technical Architecture & Data Flow
+
+I built the AWS Step Functions state machine and core processing Lambdas, coordinating data flow across S3, OpenAI, DuckDB, and platform APIs.
+
+The diagram below shows a typical execution of the pipeline. Each state displays its input and output, making it easy to trace data through the workflow. During debugging, developers can open the related Lambda or CloudWatch logs directly from the execution view, then retry a failed state or rerun the entire workflow after making changes.
+
+<img width="1606" height="719" alt="fractionstepfunctions_graph" src="https://github.com/user-attachments/assets/245cd97c-7ca4-4fa6-b266-d1a063c00801" />
+
+
+### Data Processing Steps
+
+1. **Format Routing (`Check isOTFormat`):** Determines whether the submission is an OpenTicket ticket, an OpenInvoice invoice, or a blanket ticket. The pipeline then routes the document through the required processing steps.
+
+2. **Aimsio PDF Header Parsing (`extract Aimsio tickets header from PDF`):** Reads the PDF from S3 using PDFPlumber to extract ticket level information that is not included in blanket invoice JSON exports and merges it into the processing state.
+
+3. **Multimodal Vision Processing (`chatGpt reads logos`):** Converts PDF pages to JPEG images using PyMuPDF and passes the images to OpenAI GPT-4o to identify the supplier logo to determine which supplier department the document should be submitted as.
+
+4. **Pipeline Branching (`Check isOT`):** Routes OpenTicket submissions to the pricebook engine and OpenInvoice submissions to VPC validation.
+
+5. **In-Memory DuckDB Pricebook Engine (`Fraction OT pricebook`):** Runs for OpenTicket submissions. Loads the buyer CSV pricebook into an in-memory DuckDB table, cleans descriptions, validates effective dates, rate bounds, and units, then updates item IDs in the JSON.
+
+6. **VPC AFE & Code Validation (`Fraction OI AFE validation`):** Runs inside an existing whitelisted AWS VPC to validate AFE numbers and accounting codes against OpenInvoice APIs.
+
+7. **Final Output (`output to v3 lambda`):** Sends the completed JSON payload to the downstream submission Lambda.
+8. 
 ---
 
 ## Engineering Challenges & Solutions
@@ -50,30 +77,4 @@ To prepare each submission, the pipeline performs four processing steps:
 
 * **The Solution:** I added a validation Lambda that queries the OpenInvoice API for every extracted AFE and accounting code before submission. The function runs inside an existing VPC with static outbound IP addresses that satisfy the platform's whitelist requirements. Client certificates are loaded from SSM Parameter Store during cold starts and written to temporary files under /tmp, allowing the Python requests library to perform mutual TLS authentication efficiently.
 
----
-
-## Architecture & Data Flow
-
-I built the AWS Step Functions state machine and core processing Lambdas, coordinating data flow across S3, OpenAI, DuckDB, and platform APIs.
-
-The diagram below shows a typical execution of the pipeline. Each state displays its input and output, making it easy to trace data through the workflow. During debugging, developers can open the related Lambda or CloudWatch logs directly from the execution view, then retry a failed state or rerun the entire workflow after making changes.
-
-<img width="1606" height="719" alt="fractionstepfunctions_graph" src="https://github.com/user-attachments/assets/245cd97c-7ca4-4fa6-b266-d1a063c00801" />
-
-
-### Data Processing Steps
-
-1. **Format Routing (`Check isOTFormat`):** Determines whether the submission is an OpenTicket ticket, an OpenInvoice invoice, or a blanket ticket. The pipeline then routes the document through the required processing steps.
-
-2. **Aimsio PDF Header Parsing (`extract Aimsio tickets header from PDF`):** Reads the PDF from S3 using PDFPlumber to extract ticket level information that is not included in blanket invoice JSON exports and merges it into the processing state.
-
-3. **Multimodal Vision Processing (`chatGpt reads logos`):** Converts PDF pages to JPEG images using PyMuPDF and passes the images to OpenAI GPT-4o to identify the supplier logo to determine which supplier department the document should be submitted as.
-
-4. **Pipeline Branching (`Check isOT`):** Routes OpenTicket submissions to the pricebook engine and OpenInvoice submissions to VPC validation.
-
-5. **In-Memory DuckDB Pricebook Engine (`Fraction OT pricebook`):** Runs for OpenTicket submissions. Loads the buyer CSV pricebook into an in-memory DuckDB table, cleans descriptions, validates effective dates, rate bounds, and units, then updates item IDs in the JSON.
-
-6. **VPC AFE & Code Validation (`Fraction OI AFE validation`):** Runs inside an existing whitelisted AWS VPC to validate AFE numbers and accounting codes against OpenInvoice APIs.
-
-7. **Final Output (`output to v3 lambda`):** Sends the completed JSON payload to the downstream submission Lambda.
 
