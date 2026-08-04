@@ -10,21 +10,25 @@
 
 ---
 
-## Business Requirements
+## Background
 
-At EMI, we automate field service ticket and invoice submissions for oil and gas suppliers to platforms including OpenInvoice and OpenTicket. Many client suppliers manage field operations using an accounting software called Aimsio. When Aimsio creates a ticket or invoice, it generates a raw JSON file alongside an attached PDF copy.
+At EMI, we automate field service ticket and invoice submissions for oil and gas suppliers to platforms including OpenInvoice and OpenTicket. Many suppliers manage their field operations in [Aimsio](https://aimsio.com/). When Aimsio creates a ticket or invoice, it exports a structured JSON file together with one or more PDF documents.
 
-Aimsio exports data into three distinct JSON payload formats depending on whether field staff save a transaction as a ticket, an invoice, or a blanket invoice. Upstream users select the ticket or invoice format based on whether the downstream buyer expects an OpenTicket or OpenInvoice submission. About 99% of the data required is provided and can be directly processed in the structured JSON. However, several pieces of information required by downstream platforms are omitted from the JSON and are only available in the attached PDF documents.
+Aimsio supports three different JSON formats depending on whether users save the transaction as a ticket, an invoice, or a blanket invoice. Suppliers choose the format based on the downstream platform and buyer requirements.
 
-To prepare each submission, the pipeline should perform four processing steps:
+Although the JSON contains most of the required data, several fields needed for downstream processing are only available in the attached PDFs. The pipeline combines information from both sources before submitting the transaction.
 
-* **Determine the supplier department:** The JSON export does not include the supplier department. Instead, the selected department is indicated by the logo shown in the PDF header, so the pipeline identifies the logo to determine which supplier department to submit as.
+## Functional Requirements
+
+Before a document can be submitted to OpenTicket or OpenInvoice, the pipeline must perform four processing steps:
+
+1. **Determine the supplier department:** The JSON export does not include the supplier department. Instead, the selected department is indicated by the logo shown in the PDF header, so the pipeline identifies the logo to determine which supplier department to submit as.
   
-* **Recover ticket information:** Blanket invoice JSON exports omit the individual ticket details. The pipeline extracts the missing information from the attached ticket PDFs before submission.
+2. **Recover ticket information:** Blanket invoice JSON exports omit the individual ticket details. The pipeline extracts the missing information from the attached ticket PDFs before submission.
   
-* **Match buyer pricebooks:** Aimsio item descriptions differ from buyer approved pricebooks in OpenTicket, so each line item must be matched against the correct buyer pricebook using the description, rate, and unit before submission.
+3. **Match buyer pricebooks:** Aimsio item descriptions differ from buyer approved pricebooks in OpenTicket, so each line item must be matched against the correct buyer pricebook using the description, rate, and unit before submission.
 
-* **Validate AFE and accounting codes:** Before submitting to OpenInvoice, the pipeline validates AFE (Authorization for Expenditure) through the platform API to reduce submission failures caused by invalid or mistyped values.
+4. **Validate AFE and accounting codes:** Before submitting to OpenInvoice, the pipeline validates AFE (Authorization for Expenditure) through the platform API to reduce submission failures caused by invalid or mistyped values.
 
 ---
 
