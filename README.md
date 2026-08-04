@@ -4,40 +4,51 @@
 ### Tech Stack & Tools
 * **Orchestration & Compute:** AWS Step Functions, AWS Lambda (Python 3.13 & JavaScript)
 * **Embedded Database Engine:** DuckDB (In-Memory SQL)
-* **AI Vision & Data Parsing:** OpenAI API (GPT-4o Vision), PyMuPDF (`fitz`), PDFPlumber, Regular Expressions (`re`)
+* **Vision AI & Data Parsing:** OpenAI API (GPT-4o Vision), PyMuPDF (`fitz`), PDFPlumber, Regular Expressions (`re`)
 * **Cloud Infrastructure & Networking:** Amazon S3, AWS VPC (Static Whitelisted IPs), AWS Boto3
-* **Low-Code Migration:** Migrated from [Make (formerly Integromat)](https://www.make.com)
+* ****Security & Authentication:** Mutual TLS (mTLS) Client Certificates
 
 ---
 
-## Moving from Low-Code Limits to Serverless Step Functions
+## Business Requirements
 
 At EMI, we automate field service ticket and invoice submissions for oil and gas suppliers to platforms including OpenInvoice and OpenTicket. Many client suppliers manage field operations using an accounting software called Aimsio. When Aimsio creates a ticket or invoice, it generates a raw JSON file alongside an attached PDF copy.
 
-When these files arrive, they pass through a mapping pipeline before being submitted to downstream platforms. Originally, this processing pipeline was built inside [Make (formerly Integromat)](https://www.make.com), a visual low-code automation platform. 
+Aimsio exports data into three distinct JSON payload formats depending on whether field staff save a transaction as a ticket, an invoice, or a blanket invoice. Upstream users select the ticket or invoice format based on whether the downstream buyer expects an OpenTicket or OpenInvoice submission. About 99% of the data required is provided and can be directly processed in the structured JSON. However, several pieces of information required by downstream platforms are omitted from the JSON and are only available in the attached PDF documents.
 
-As clients requested more complex features, keeping custom business logic inside Make scenarios created severe engineering problems:
+To prepare each submission, the pipeline performs four processing steps:
 
-* **Problem 1: Missing ticket details in blanket JSON exports.** When Aimsio exports blanket invoices containing multiple tickets, the raw JSON payload omits individual ticket header details. The information exists solely as text inside the attached PDF.
+* **Determine the supplier department:** The JSON export does not include the supplier department. Instead, the selected department is indicated by the logo shown in the PDF header, so the pipeline identifies the logo to determine which supplier department to submit as.
   
-* **Problem 2: Omitted supplier department fields.** OpenInvoice requires invoices to specify a supplier site or department code. The Aimsio raw JSON export lacks this field entirely, but the PDF document visually displays the department logo on the header.
+* **Recover ticket information:** Blanket invoice JSON exports omit the individual ticket details. The pipeline extracts the missing information from the attached ticket PDFs before submission.
   
-* **Problem 3: The Make workflow became difficult to maintain.** Adding multi-page PDF text parsing, image conversion, and dynamic pricebook matching made the Make flows brittle and difficult to debug. 
+* **Match buyer pricebooks:** Aimsio item descriptions differ from buyer approved pricebooks in OpenTicket, so each line item must be matched against the correct buyer pricebook using the description, rate, and unit before submission.
+
+* **Validate AFE and accounting codes:** Before submitting to OpenInvoice, the pipeline validates AFE (Authorization for Expenditure) through the platform API to reduce submission failures caused by invalid or mistyped values.
 
 ---
 
-## Solution & Results
+## Engineering Challenges & Solutions
 
-To solve these challenges, I rebuilt the pipeline in AWS Step Functions using Python Lambda functions. The pipeline automates PDF text extraction, visual AI logo recognition, in-memory SQL pricebook matching, and secure VPC code validation.
+### 1. Recovering missing ticket headers from blanket invoice PDFs
+* **The Challenge:** When Aimsio exports a blanket invoice, it generates one invoice JSON but leaves out the individual ticket details. Those details are still available in the attached ticket PDFs and are required for downstream processing.
 
-### Key Results
-* **Rebuilt the Pipeline in AWS:** Replaced the Make workflow with an AWS Step Functions pipeline, providing centralized execution history and CloudWatch logging for easier debugging.
+* **The Solution:** I wrote `aimsio_extract_tickets_header_pdf` using PDFPlumber. The Lambda scans PDF text, extracts the missing ticket headers, and merges them into the S3 state JSON before downstream submission.
 
-* **Parsed Ticket Headers from PDFs:** Used PDFPlumber to extract ticket header information that was present only in attached PDFs and merge it into the processing pipeline.
+### 2. Extracting visual department context using PyMuPDF and GPT-4o
+* **The Challenge:** OpenInvoice requires a supplier department, but Aimsio does not include it in the JSON export. Instead, the selected department is indicated by the logo shown in the header of each page of the attached tickets PDF.
 
-* **Identified Supplier Departments from Logos:** Used PyMuPDF and GPT-4o Vision to recognize supplier division logos and populate the department code required by OpenInvoice.
+* **The Solution:** I developed `fraction_logo_extractor` using PyMuPDF (`fitz`) and OpenAI GPT-4o Vision. The Lambda converts PDF pages into base64 JPEG images, sends them to GPT-4o Vision, identifies the division logo and company name, then writes the department information back to the JSON stored in S3.
 
-* **Millisecond Pricebook Matching:** Used an in memory DuckDB database inside Lambda to match invoice line items against hundreds of pricebook records in milliseconds.
+### 3. Sub-second CSV pricebook queries using in-memory DuckDB
+* **The Challenge:** OpenTicket line items use internal Aimsio descriptions that do not match registered buyer pricebooks. Line items must be matched against CSV pricebooks containing effective date ranges, rate limits, and unit types. Searching large CSV pricebooks with nested Python loops would require repeatedly scanning every record for every invoice line item. That approach became slower as pricebooks grew.
+
+* **The Solution:** I embedded DuckDB directly inside the Lambda. Each invocation loads the buyer's CSV pricebook into an in memory table, filters expired entries, normalizes text descriptions with SQL regex functions, and runs a weighted SQL query to return the best match.
+
+### 4. Validating AFE codes before OpenInvoice submission
+* **The Challenge:** OpenInvoice validates AFE and accounting codes during submission. Mistyped or invalid values cause the submission to fail. Because invoices are also grouped by AFE, the extracted values must be correct before the pipeline splits and submits the invoice.
+
+* **The Solution:** I added a validation Lambda that queries the OpenInvoice API for every extracted AFE and accounting code before submission. The function runs inside an existing VPC with static outbound IP addresses that satisfy the platform's whitelist requirements. Client certificates are loaded from SSM Parameter Store during cold starts and written to temporary files under /tmp, allowing the Python requests library to perform mutual TLS authentication efficiently.
 
 ---
 
@@ -45,45 +56,24 @@ To solve these challenges, I rebuilt the pipeline in AWS Step Functions using Py
 
 I built the AWS Step Functions state machine and core processing Lambdas, coordinating data flow across S3, OpenAI, DuckDB, and platform APIs.
 
+The diagram below shows a typical execution of the pipeline. Each state displays its input and output, making it easy to trace data through the workflow. During debugging, developers can open the related Lambda or CloudWatch logs directly from the execution view, then retry a failed state or rerun the entire workflow after making changes.
+
 <img width="1606" height="719" alt="fractionstepfunctions_graph" src="https://github.com/user-attachments/assets/245cd97c-7ca4-4fa6-b266-d1a063c00801" />
 
 
 ### Data Processing Steps
 
-1. **Format Routing (`Check isOTFormat`):** Evaluates the incoming `isOTFormat` flag. OpenTicket submissions skip ticket PDF parsing and jump straight to logo extraction, while OpenInvoice submissions pass through PDF header parsing first.
+1. **Format Routing (`Check isOTFormat`):** Determines whether the submission is an OpenTicket ticket, an OpenInvoice invoice, or a blanket ticket. The pipeline then routes the document through the required processing steps.
 
-2. **Aimsio PDF Header Parsing (`extract Aimsio tickets header from PDF`):** Reads the PDF from S3 using PDFPlumber to parse individual ticket headers from multi-ticket invoices, merging the extracted data back into the central JSON state.
+2. **Aimsio PDF Header Parsing (`extract Aimsio tickets header from PDF`):** Reads the PDF from S3 using PDFPlumber to extract ticket level information that is not included in blanket invoice JSON exports and merges it into the processing state.
 
-3. **Multimodal Vision Processing (`chatGpt reads logos`):** Converts PDF pages to JPEG images using PyMuPDF and passes base64 streams to OpenAI GPT-4o to identify division names from logos, enriching the department field.
+3. **Multimodal Vision Processing (`chatGpt reads logos`):** Converts PDF pages to JPEG images using PyMuPDF and passes the images to OpenAI GPT-4o to identify the supplier logo to determine which supplier department the document should be submitted as.
 
 4. **Pipeline Branching (`Check isOT`):** Routes OpenTicket submissions to the pricebook engine and OpenInvoice submissions to VPC validation.
 
-5. **In-Memory DuckDB Pricebook Engine (`Fraction OT pricebook`):** Runs for OpenTicket submissions. Loads buyer CSV pricebooks into an in-memory DuckDB table, cleans descriptions, validates rate bounds and expiry dates, and updates item IDs in the JSON.
+5. **In-Memory DuckDB Pricebook Engine (`Fraction OT pricebook`):** Runs for OpenTicket submissions. Loads the buyer CSV pricebook into an in-memory DuckDB table, cleans descriptions, validates effective dates, rate bounds, and units, then updates item IDs in the JSON.
 
-6. **VPC AFE & Code Validation (`Fraction OI AFE validation`):** Executes inside an existing whitelisted AWS VPC to validate AFE numbers and accounting codes against OpenInvoice APIs before final submission.
+6. **VPC AFE & Code Validation (`Fraction OI AFE validation`):** Runs inside an existing whitelisted AWS VPC to validate AFE numbers and accounting codes against OpenInvoice APIs.
 
 7. **Final Output (`output to v3 lambda`):** Sends the completed JSON payload to the downstream submission Lambda.
 
----
-
-## Engineering Challenges & Solutions
-
-### 1. Sub-second CSV pricebook queries using in-memory DuckDB
-* **The Challenge:** OpenTicket line items use internal Aimsio descriptions that do not match registered buyer pricebooks. Line items had to be validated against CSV pricebooks containing effective date ranges, rate limits, and unit types. Performing nested Python loops across large pricebooks inside Lambda was slow and inefficient.
-
-* **The Solution:** Embedded DuckDB directly inside the `fraction_pricebook_mapping_complete` Lambda handler. On invocation, the Lambda loads the buyer CSV into an in-memory DuckDB table (`:memory:`), normalizes text descriptions with SQL regex functions, and filters out expired records. It then executes a weighted SQL query that ranks candidates by match weight, string length difference, and rate constraints to return the single best pricebook match.
-
-### 2. Extracting visual department context using PyMuPDF and GPT-4o
-* **The Challenge:** OpenInvoice requires a supplier department code, but Aimsio JSON files omit this field. The information is only visible as a graphical company logo on the PDF header.
-
-* **The Solution:** Developed `fraction_logo_extractor` using PyMuPDF (`fitz`) and OpenAI vision models. The Lambda converts PDF pages into base64 JPEG images and submits them to GPT-4o. GPT-4o identifies the division logo and company name, then writes the department information back to the JSON stored in S3.
-
-### 3. Recovering missing ticket headers from blanket invoice PDFs
-* **The Challenge:** Aimsio blanket invoices group multiple tickets into one PDF. The exported JSON payload omits individual ticket headers, leaving downstream systems without ticket level dates or PO numbers.
-
-* **The Solution:** Wrote `aimsio_extract_tickets_header_pdf` using PDFPlumber to inspect PDF text streams. The Lambda scans the PDF text labels across multi-page files, extracts missing ticket headers, and merges them into the S3 state JSON before downstream submission.
-
-### 4. Integrating whitelisted API calls using an existing AWS VPC
-* **The Challenge:** OpenInvoice API calls for AFE and accounting code validation fail if they do not originate from authorized static IP addresses.
-
-* **The Solution:** Placed the AFE validation Lambda directly inside our existing AWS VPC configured with static Elastic IPs and NAT Gateways. This ensures all outgoing requests match vendor whitelists without changing the existing network architecture.
