@@ -56,7 +56,7 @@ The diagram below shows a typical execution of the pipeline. Each state displays
 6. **VPC AFE & Code Validation (`Fraction OI AFE validation`):** Runs inside an existing whitelisted AWS VPC to validate AFE numbers and accounting codes against OpenInvoice APIs.
 
 7. **Final Output (`output to v3 lambda`):** Sends the completed JSON payload to the downstream submission Lambda.
-8. 
+
 ---
 
 ## Engineering Challenges & Solutions
