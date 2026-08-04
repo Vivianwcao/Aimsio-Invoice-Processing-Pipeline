@@ -34,9 +34,7 @@ Before a document can be submitted to OpenTicket or OpenInvoice, the pipeline mu
 
 ## Technical Architecture & Data Flow
 
-I built the AWS Step Functions state machine and core processing Lambdas, coordinating data flow across S3, OpenAI, DuckDB, and platform APIs.
-
-The diagram below shows a typical execution of the pipeline. Each state displays its input and output, making it easy to trace data through the workflow. During debugging, developers can open the related Lambda or CloudWatch logs directly from the execution view, then retry a failed state or rerun the entire workflow after making changes.
+I built an AWS Step Functions state machine that orchestrates the document processing workflow shown below. Each state invokes a Lambda function responsible for a specific processing task. The execution view displays the input and output for every state, making it easy to trace data through the workflow. During debugging, developers can open the associated Lambda function or CloudWatch logs directly from the execution view, then retry a failed state or rerun the entire workflow after making changes.
 
 <img width="1606" height="719" alt="fractionstepfunctions_graph" src="https://github.com/user-attachments/assets/245cd97c-7ca4-4fa6-b266-d1a063c00801" />
 
