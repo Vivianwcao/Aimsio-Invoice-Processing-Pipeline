@@ -36,7 +36,15 @@ Before a document can be submitted to OpenTicket or OpenInvoice, the pipeline mu
 
 I built an AWS Step Functions state machine that orchestrates the document processing workflow shown below. Each state invokes a Lambda function responsible for a specific processing task. The execution view displays the input and output for every state, making it easy to trace data through the workflow. During debugging, developers can open the associated Lambda function or CloudWatch logs directly from the execution view, then retry a failed state or rerun the entire workflow after making changes.
 
-<img width="1606" height="719" alt="fractionstepfunctions_graph" src="https://github.com/user-attachments/assets/245cd97c-7ca4-4fa6-b266-d1a063c00801" />
+*The original statemachine - Worked for supplier Fraction*
+<img width="1298" height="767" alt="original" src="https://github.com/user-attachments/assets/3f82c3b7-4deb-4932-a78b-9424ab36ad7e" />
+
+***Aug 7, 2026 update**: Added more states to support multiple suppliers. This example shows an execution for Kinetic (left), which also uses Aimsio and may require AFE validation or pricebook mapping, and Fraction (right).*
+
+<img width="49%" alt="update2" src="https://github.com/user-attachments/assets/5fa3e49e-d36e-4f56-85ec-c4897d953bcc" />
+<img width="49%" alt="update1" src="https://github.com/user-attachments/assets/240d888a-3753-4c76-ab37-3123275e00f8" />
+
+<img width="1303" height="591" alt="Fraction State machine executions" src="https://github.com/user-attachments/assets/a000a94f-1e7f-4f67-85c1-6d7dd8d8cf1a" />
 
 
 ### Data Processing Steps
